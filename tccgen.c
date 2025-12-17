@@ -4598,7 +4598,7 @@ do_decl:
                         do_Static_assert();
                         continue;
                     }
-		    skip(';');
+		    if (tok == ';') 
 		    continue;
 		}
                 while (1) {
@@ -4691,11 +4691,12 @@ do_decl:
                         *ps = ss;
                         ps = &ss->next;
                     }
-                    if (tok == ';' || tok == TOK_EOF)
+                    if (tok == ';' || tok == '}' || tok == TOK_EOF)
                         break;
-                    skip(',');
+                    if (tok == ',') skip(',');
+					else break;
                 }
-                skip(';');
+                if (tok == ';') skip(';');
             }
             skip('}');
 	    parse_attribute(&ad);
@@ -4759,7 +4760,7 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
         basic_type1:
             if (u == VT_SHORT || u == VT_LONG) {
                 if (st != -1 || (bt != -1 && bt != VT_INT))
-                    tmbt: tcc_error("too many basic types");
+                    tmbt: /*tcc_error("too many basic types");*/ break;
                 st = u;
             } else {
                 if (bt != -1 || (st != -1 && u != VT_INT))
@@ -7156,7 +7157,7 @@ static void gexpr_decl(void)
         vtop->sym = s;
     } else {
         if (v)
-            skip(';');
+            if (tok == ';') skip(';');
         gexpr();
     }
 }
@@ -7224,7 +7225,7 @@ again:
                 label_push(&local_label_stack, tok, LABEL_DECLARED);
                 next();
             } while (tok == ',');
-            skip(';');
+            if (tok == ';') skip(';');
         }
 
         while (tok != '}') {
@@ -7244,7 +7245,7 @@ again:
 
     } else if (t == TOK_RETURN) {
         b = (func_vt.t & VT_BTYPE) != VT_VOID;
-        if (tok != ';') {
+        if (tok != ';' && b) {
             gexpr();
             if (b) {
                 gen_assign_cast(&func_vt);
@@ -7260,7 +7261,7 @@ again:
         leave_scope(root_scope);
         if (b)
             gfunc_return(&func_vt);
-        skip(';');
+        if (tok == ';') skip(';');
         /* jump unless last stmt in top-level block */
         if (tok != '}' || local_scope != 1)
             rsym = gjmp(rsym);
@@ -7277,7 +7278,7 @@ again:
         else
             leave_scope(loop_scope);
         *cur_scope->bsym = gjmp(*cur_scope->bsym);
-        skip(';');
+        if (tok == ';') skip(';');
 
     } else if (t == TOK_CONTINUE) {
         /* compute jump */
@@ -7285,7 +7286,7 @@ again:
             tcc_error("cannot continue");
         leave_scope(loop_scope);
         *cur_scope->csym = gjmp(*cur_scope->csym);
-        skip(';');
+        if (tok == ';') skip(';');
 
     } else if (t == TOK_FOR) {
         new_scope(&o);
@@ -7299,14 +7300,14 @@ again:
                 vpop();
             }
         }
-        skip(';');
+        if (tok == ';') skip(';');
         a = b = 0;
         c = d = gind();
         if (tok != ';') {
             gexpr();
             a = gvtst(1, 0);
         }
-        skip(';');
+        if (tok == ';') skip(';');
         if (tok != ')') {
             e = gjmp(0);
             d = gind();
@@ -7333,7 +7334,7 @@ again:
 	gexpr();
         c = gvtst(0, 0);
         skip(')');
-        skip(';');
+        if (tok == ';') skip(';');
 	gsym_addr(c, d);
         gsym(a);
         prev_scope_s(&o);
@@ -7445,7 +7446,7 @@ again:
         } else {
             expect("label identifier");
         }
-        skip(';');
+        if (tok == ';') skip(';');
 
     } else if (t == TOK_ASM1 || t == TOK_ASM2 || t == TOK_ASM3) {
         asm_instr();
@@ -7500,7 +7501,7 @@ again:
                     gexpr();
                     vpop();
                 }
-                skip(';');
+                if (tok == ';') skip(';');
             }
         }
     }
@@ -8149,7 +8150,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 
     } else if (tok == '{') {
         if (flags & DIF_HAVE_ELEM)
-          skip(';');
+          if (tok == ';') skip(';');
         next();
         decl_initializer(p, type, c, flags & ~DIF_HAVE_ELEM);
         skip('}');
@@ -8656,7 +8657,7 @@ static void do_Static_assert(void)
     skip(')');
     if (c == 0)
         tcc_error("%s", msg);
-    skip(';');
+    if (tok == ';') skip(';');
 }
 
 #ifdef TCC_TARGET_PE
@@ -8928,7 +8929,7 @@ static int decl(int l)
                 if (tok != ',') {
                     if (l == VT_JMP)
                         return has_init ? v : 1;
-                    skip(';');
+                    if (tok == ';') skip(';');
                     break;
                 }
                 next();
