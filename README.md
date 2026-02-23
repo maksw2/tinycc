@@ -60,3 +60,5 @@ A: `-skip(';');` `+if (tok == ';') skip(';');` and some struct tomfoolery.
 
 Q: Can i use this in production?
 A: Why would you?
+
+inspired by tsoding 🤑
