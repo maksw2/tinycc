@@ -6624,31 +6624,57 @@ static void expr_landor_operand(int op, ImplicitLHS *reuse)
     expr_infix(precedence(op) + 1, reuse);
 }
 
+/* Comparison chains evaluate intermediate operands once.  Each earlier
+   comparison jumps to false before evaluating the following operand. */
 static void expr_infix(int p, ImplicitLHS *reuse)
 {
     int t = tok, p2;
     while ((p2 = precedence(t)) >= p) {
         if (t == TOK_LOR || t == TOK_LAND) {
             expr_landor(t, reuse);
-        } else {
-            if (implicit_comparison(t)) {
+        } else if (implicit_comparison(t)) {
+            int false_jumps = 0;
+            for (;;) {
+                /* Cache the LHS for the existing abbreviated comparisons. */
                 if (nocode_wanted || (vtop->type.t & VT_BTYPE) == VT_FUNC)
                     vdup();
                 else
                     gv_dup();
                 if (reuse->saved) {
-                    /* The latest explicit comparison becomes the source. */
                     *reuse->saved = vtop[-1];
                     vtop[-1] = vtop[0];
                     vtop--;
                 } else {
                     reuse->saved = vtop - 1;
                 }
+                next();
+                unary();
+                /* Comparison operators share the chain level. */
+                if (precedence(tok) > 7)
+                    expr_infix(8, reuse);
+                if (!implicit_comparison(tok) || precedence(tok) < p) {
+                    gen_op(t);
+                    if (false_jumps)
+                        gvtst_set(1, false_jumps);
+                    break;
+                }
+                /* [saved, left, middle] -> [saved, middle, left, middle]
+                   so the middle survives the first comparison. */
+                if (nocode_wanted || (vtop->type.t & VT_BTYPE) == VT_FUNC)
+                    vdup();
+                else
+                    gv_dup();
+                vrotb(3);
+                vswap();
+                gen_op(t);
+                false_jumps = gvtst(1, false_jumps);
+                t = tok;
             }
+        } else {
             next();
             unary();
             if (precedence(tok) > p2)
-              expr_infix(p2 + 1, reuse);
+                expr_infix(p2 + 1, reuse);
             gen_op(t);
         }
         t = tok;
