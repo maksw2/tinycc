@@ -6557,8 +6557,27 @@ static void expr_lor(void)
 
 # define expr_landor_next(op) op == TOK_LAND ? expr_or() : expr_land()
 #else /* defined precedence_parser */
-# define expr_landor_next(op) unary(), expr_infix(precedence(op) + 1)
-# define expr_lor() unary(), expr_infix(1)
+# define expr_landor_next(op) expr_landor_operand(op, reuse)
+
+/* Experimental implicit comparison LHS, scoped to one logical expression. */
+typedef struct {
+    SValue *saved;
+} ImplicitLHS;
+
+static void expr_infix(int p, ImplicitLHS *reuse);
+static void expr_landor_operand(int op, ImplicitLHS *reuse);
+
+static void expr_lor(void)
+{
+    ImplicitLHS reuse = { 0 };
+    unary();
+    expr_infix(1, &reuse);
+    if (reuse.saved) {
+        /* Drop cached operand, leaving just the expression result. */
+        *reuse.saved = *vtop;
+        vtop--;
+    }
+}
 
 static int precedence(int tok)
 {
@@ -6588,19 +6607,48 @@ static void init_prec(void)
 }
 #define precedence(i) ((unsigned)i < 256 ? prec[i] : 0)
 
-static void expr_landor(int op);
+static void expr_landor(int op, ImplicitLHS *reuse);
 
-static void expr_infix(int p)
+static int implicit_comparison(int t)
+{
+    return t == TOK_EQ || t == TOK_NE || t == TOK_ULT || t == TOK_UGE ||
+           (t >= TOK_ULE && t <= TOK_GT);
+}
+
+static void expr_landor_operand(int op, ImplicitLHS *reuse)
+{
+    if (reuse->saved && implicit_comparison(tok))
+        vpushv(reuse->saved);
+    else
+        unary();
+    expr_infix(precedence(op) + 1, reuse);
+}
+
+static void expr_infix(int p, ImplicitLHS *reuse)
 {
     int t = tok, p2;
     while ((p2 = precedence(t)) >= p) {
         if (t == TOK_LOR || t == TOK_LAND) {
-            expr_landor(t);
+            expr_landor(t, reuse);
         } else {
+            if (implicit_comparison(t)) {
+                if (nocode_wanted || (vtop->type.t & VT_BTYPE) == VT_FUNC)
+                    vdup();
+                else
+                    gv_dup();
+                if (reuse->saved) {
+                    /* The latest explicit comparison becomes the source. */
+                    *reuse->saved = vtop[-1];
+                    vtop[-1] = vtop[0];
+                    vtop--;
+                } else {
+                    reuse->saved = vtop - 1;
+                }
+            }
             next();
             unary();
             if (precedence(tok) > p2)
-              expr_infix(p2 + 1);
+              expr_infix(p2 + 1, reuse);
             gen_op(t);
         }
         t = tok;
@@ -6624,7 +6672,11 @@ static int condition_3way(void)
     return c;
 }
 
+#ifdef precedence_parser
+static void expr_landor(int op, ImplicitLHS *reuse)
+#else
 static void expr_landor(int op)
+#endif
 {
     int t = 0, cc = 1, f = 0, i = op == TOK_LAND, c;
     for(;;) {
