@@ -545,6 +545,7 @@ typedef struct Sym {
     };
 
     CType type; /* associated type */
+    struct TokenString *default_arg; /* TinyC+: optional parameter default */
     union {
         struct Sym *next; /* next related symbol (for fields and anoms) */
         int *e; /* expanded token stream with preprocessor macros */

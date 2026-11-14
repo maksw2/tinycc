@@ -1269,6 +1269,19 @@ static void patch_type(Sym *sym, CType *type)
                 static_proto |= VT_INLINE;
         }
 
+        /* Preserve defaults across compatible declarations/definitions. */
+        {
+            Sym *oldarg = sym->type.ref->next;
+            Sym *newarg = type->ref->next;
+            while (oldarg && newarg) {
+                if (!newarg->default_arg)
+                    newarg->default_arg = oldarg->default_arg;
+                else if (!oldarg->default_arg)
+                    oldarg->default_arg = newarg->default_arg;
+                oldarg = oldarg->next;
+                newarg = newarg->next;
+            }
+        }
         if (0 == (type->t & VT_EXTERN)) {
             struct FuncAttr f = sym->type.ref->f;
             /* put complete type, use static from prototype */
@@ -5133,6 +5146,28 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                 /* these symbols may be evaluated for VLArrays (see below, under
                    nocode_wanted) Example: int func(int a, int b[++a]); */
                 s = sym_push(n, &pt, VT_LOCAL|VT_LVAL, 0);
+                if (tok == '=') {
+                    int nesting = 0;
+                    TokenString *def = tok_str_alloc();
+                    next();
+                    while (tok != TOK_EOF) {
+                        if (!nesting && (tok == ',' || tok == ')'))
+                            break;
+                        if (tok == '(' || tok == '[' || tok == '{')
+                            ++nesting;
+                        else if (tok == ')' || tok == ']' || tok == '}') {
+                            if (!nesting)
+                                tcc_error("unbalanced default argument");
+                            --nesting;
+                        }
+                        tok_str_add_tok(def);
+                        next();
+                    }
+                    if (!def->len || nesting)
+                        tcc_error("invalid default argument");
+                    tok_str_add(def, TOK_EOF);
+                    s->default_arg = def;
+                }
                 *plast = s;
                 plast = &s->next;
                 if (tok == ')')
@@ -6351,6 +6386,29 @@ special_math_val:
                         break;
                     skip(',');
                 }
+            }
+            /* TinyC+: fill omitted trailing arguments at the call site.
+               The token stream was recorded when parsing the prototype. */
+            while (sa && sa->default_arg) {
+                TokenString *def = tok_str_alloc();
+                int k;
+                for (k = 0; k < sa->default_arg->len; ++k)
+                    tok_str_add(def, sa->default_arg->str[k]);
+                if (tcc_state->reverse_funcargs) {
+                    def->prev = p;
+                    p = def;
+                } else {
+                    begin_macro(def, 1);
+                    next();
+                    expr_eq();
+                    if (tok != TOK_EOF)
+                        tcc_error("invalid default argument expression");
+                    end_macro();
+                    tok = ')'; /* retain caller's closing parenthesis */
+                    gfunc_param_typed(s, sa);
+                }
+                ++nb_args;
+                sa = sa->next;
             }
             if (sa)
                 tcc_error("too few arguments to function");
