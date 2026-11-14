@@ -7182,12 +7182,43 @@ static void save_lvalues(void)
     }
 }
 
+/* Reparse a deferred statement at each emitted scope-exit site.  A
+   borrowed token buffer keeps the original registration reusable. */
+static int defer_replaying;
+static int defer_function_active;
+static int defer_function_saw_goto;
+
+static void emit_deferred_statement(TokenString *code)
+{
+    int saved_tok = tok;
+    CValue saved_tokc = tokc;
+    TokenString *view = tok_str_alloc();
+
+    view->str = code->str;
+    begin_macro(view, 2);  /* release view but preserve the shared tokens */
+    ++defer_replaying;
+    save_regs(0);
+    save_lvalues();
+    next();
+    block(0);
+    if (tok != TOK_EOF)
+        tcc_error("invalid deferred statement");
+    end_macro();
+    --defer_replaying;
+    tok = saved_tok;
+    tokc = saved_tokc;
+}
+
 static void try_call_scope_cleanup(Sym *stop)
 {
     Sym *cls = cur_scope->cl.s;
     for (; cls != stop; cls = cls->next) {
 	Sym *fs = cls->cleanup_func;
 	Sym *vs = cls->cleanup_sym;
+        if (cls->default_arg) {
+            emit_deferred_statement(cls->default_arg);
+            continue;
+        }
 	save_lvalues();
 	vpushsym(&fs->type, fs);
 	vset(&vs->type, vs->r, vs->c);
@@ -7448,6 +7479,63 @@ again:
         else if (!nocode_wanted)
             check_func_return();
 
+    } else if (t == TOK_DEFER) {
+        TokenString *code;
+        Sym *cls;
+        int depth = 0, block_form;
+
+        if (defer_replaying)
+            tcc_error("nested defer in a deferred statement");
+        if (!(flags & STMT_COMPOUND))
+            tcc_error("defer requires an explicitly braced block");
+        if (cur_switch)
+            tcc_error("defer within switch requires a future control-flow extension");
+        if (defer_function_saw_goto)
+            tcc_error("goto and defer cannot be combined");
+        defer_function_active = 1;
+        code = tok_str_alloc();
+        block_form = tok == '{';
+        if (block_form) {
+            do {
+                if (tok == '{')
+                    ++depth;
+                else if (tok == '}')
+                    --depth;
+                if (tok == TOK_RETURN || tok == TOK_GOTO ||
+                    tok == TOK_BREAK || tok == TOK_CONTINUE ||
+                    tok == TOK_DEFER)
+                    tcc_error("control-flow transfers within defer are unsupported");
+                tok_str_add_tok(code);
+                next();
+                if (tok == TOK_EOF)
+                    tcc_error("unterminated defer block");
+            } while (depth);
+        } else {
+            while (tok != ';' && tok != TOK_EOF) {
+                if (tok == TOK_RETURN || tok == TOK_GOTO ||
+                    tok == TOK_BREAK || tok == TOK_CONTINUE ||
+                    tok == TOK_DEFER)
+                    tcc_error("control-flow transfers within defer are unsupported");
+                if (tok == '(' || tok == '[' || tok == '{')
+                    ++depth;
+                else if (tok == ')' || tok == ']' || tok == '}')
+                    --depth;
+                tok_str_add_tok(code);
+                next();
+            }
+            if (tok != ';' || depth || !code->len)
+                tcc_error("invalid defer expression");
+            tok_str_add_tok(code);
+            next();
+        }
+        tok_str_add(code, TOK_EOF);
+        tok_str_add(code, 0);
+        cls = sym_push2(&all_cleanups,
+                        SYM_FIELD | ++cur_scope->cl.n, 0, 0);
+        cls->default_arg = code;
+        cls->next = cur_scope->cl.s;
+        cur_scope->cl.s = cls;
+
     } else if (t == TOK_RETURN) {
         b = (func_vt.t & VT_BTYPE) != VT_VOID;
         if (tok != ';') {
@@ -7618,6 +7706,9 @@ again:
         goto block_after_label;
 
     } else if (t == TOK_GOTO) {
+        defer_function_saw_goto = 1;
+        if (defer_function_active)
+            tcc_error("goto and defer cannot be combined");
         vla_restore(cur_scope->vla.locorig);
         if (tok == '*' && gnu_ext) {
             /* computed goto */
@@ -8809,6 +8900,8 @@ static void gen_function(Sym *sym)
 	gen_fill_nops(newoff - ind);
     }
 
+    defer_function_active = 0;
+    defer_function_saw_goto = 0;
     funcname = get_tok_str(sym->v, NULL);
     func_ind = ind;
     func_vt = sym->type.ref->type;

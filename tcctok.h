@@ -68,6 +68,7 @@
      DEF(TOK_TYPEOF2, "__typeof")
      DEF(TOK_TYPEOF3, "__typeof__")
      DEF(TOK_LABEL, "__label__")
+     DEF(TOK_DEFER, "defer")
 
 /*********************************************************************/
 /* the following are not keywords. They are included to ease parsing */
